@@ -45,6 +45,7 @@
 #include "s3fs_cred.h"
 #include "threadpoolman.h"
 #include "s3fs_threadreqs.h"
+#include "encrypt.h"
 
 //------------------------------------------------
 // Symbols
@@ -1320,6 +1321,62 @@ int FdEntity::RowFlushHasLock(int fd, const char* tpath, bool force_sync)
         pagelist.Dump();
     }
 
+    // encrypt entire file before determine upload path
+    std::string encrypted_temp_path;
+    int original_physical_fd = physical_fd;
+    int encrypted_fd = -1;
+    bool encrypted_file = false;
+    
+    struct stat st;
+    if(fstat(physical_fd, &st) == 0 && st.st_size > 0) {
+        // read whole file in memory
+        std::vector<uint8_t> plaintext_data(st.st_size);
+        lseek(physical_fd, 0, SEEK_SET);
+        ssize_t total = 0;
+        while(total < st.st_size) {
+            ssize_t n = read(physical_fd, plaintext_data.data() + total, st.st_size - total);
+            if(n <= 0) {
+                if(errno == EINTR) continue;
+                return n == 0 ? -EIO : -errno;
+            }
+            total += n;
+        }
+        
+        // encrypt all text
+        Encryptor encryptor("password");
+        std::vector<uint8_t> encrypted_data = encryptor.Encrypt(plaintext_data, true);
+        if(encrypted_data.empty()) return -EIO;
+        
+        // create temp file
+        encrypted_temp_path = cachepath + ".encrypted.tmp";
+        encrypted_fd = open(encrypted_temp_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if(encrypted_fd < 0) return -errno;
+        
+        // write to temp file
+        total = 0;
+        while(total < (ssize_t)encrypted_data.size()) {
+            ssize_t n = write(encrypted_fd, encrypted_data.data() + total, encrypted_data.size() - total);
+            if(n <= 0) {
+                if(errno == EINTR) continue;
+                close(encrypted_fd);
+                unlink(encrypted_temp_path.c_str());
+                return -errno;
+            }
+            total += n;
+        }
+        
+        close(encrypted_fd);
+        
+        // update fd to use encrypted one now
+        encrypted_fd = open(encrypted_temp_path.c_str(), O_RDONLY);
+        if(encrypted_fd < 0) {
+            unlink(encrypted_temp_path.c_str());
+            return -errno;
+        }
+        
+        physical_fd = encrypted_fd;
+    }
+
     if(nomultipart){
         // No multipart upload
         if(!force_sync && !pagelist.IsModified()){
@@ -1346,6 +1403,14 @@ int FdEntity::RowFlushHasLock(int fd, const char* tpath, bool force_sync)
     if(0 != result && !cachepath.empty()){
         FdManager::DeleteCacheFile(tpath);
     }
+
+    // delete now unused encrypted path 
+    if (encrypted_file) {
+        if(encrypted_fd != -1) close(encrypted_fd);
+        physical_fd = original_physical_fd;
+        if(!encrypted_temp_path.empty()) unlink(encrypted_temp_path.c_str());
+    }
+    
 
     // [NOTE]
     // Normally, when client finishes editing a file and gets the file attributes,
