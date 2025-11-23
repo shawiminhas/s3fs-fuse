@@ -2955,36 +2955,6 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
         S3FS_PRN_INFO3("create zero byte file object.");
     }
 
-    off_t file_size = st.st_size;
-
-    // rewind file
-    fseek(b_infile.get(), 0, SEEK_SET);             
-    std::vector<uint8_t> data(file_size);
-    fread(data.data(), 1, file_size, b_infile.get());
-
-    // encrypt data
-    Encryptor encryptor("password");
-    std::vector<uint8_t> encrypted_data = encryptor.Encrypt(data);
-
-    // use a temp file 
-    std::string temp_path = "/tmp/" + std::string(basename(const_cast<char*>(tpath))) + ".temp_enc";
-    FILE* tmp_file = fopen(temp_path.c_str(), "wb");
-    if (!tmp_file) {
-        S3FS_PRN_ERR("Failed to create temp file: %s", temp_path.c_str());
-        return -errno;
-    }
-    fwrite(encrypted_data.data(), 1, encrypted_data.size(), tmp_file);
-    fclose(tmp_file);
-
-    // reopen file for reading
-    b_infile = std::unique_ptr<FILE, decltype(&s3fs_fclose)>(
-        fopen(temp_path.c_str(), "rb"), &s3fs_fclose
-    );
-
-    // update content size for curl request
-    fstat(fileno(b_infile.get()), &st);
-
-
     if(!CreateCurlHandle()){
         return -EIO;
     }
