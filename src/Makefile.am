@@ -58,7 +58,8 @@ s3fs_SOURCES = \
     sighandlers.cpp \
     threadpoolman.cpp \
     syncfiller.cpp \
-    common_auth.cpp
+    common_auth.cpp \
+    encrypt.cpp
 if USE_SSL_OPENSSL
     s3fs_SOURCES += openssl_auth.cpp
 endif
@@ -107,6 +108,8 @@ clang-tidy:
 	clang-tidy -extra-arg-before=-xc++ -extra-arg=-std=@CPP_VERSION@ \
 		*.h $(s3fs_SOURCES) test_curl_util.cpp test_page_list.cpp test_string_util.cpp \
 		-- $(DEPS_CFLAGS) $(CPPFLAGS)
+
+CXXFLAGS += -fexceptions
 
 #
 # Local variables:
